@@ -202,6 +202,7 @@ class BrowserbaseService {
      * @param {function} options.onTargetReached - 达到目标回调
      * @param {number} options.timeout - 超时时间（毫秒）
      * @param {number} options.pollInterval - 轮询间隔（毫秒）
+     * @param {Array<string>} options.loopDetectionUrls - 循环检测 URL 列表
      * @returns {Promise<void>}
      */
     connectToCDP(wsUrl, options = {}) {
@@ -211,7 +212,8 @@ class BrowserbaseService {
                 onUrlChange, 
                 onTargetReached, 
                 timeout = 1800000,
-                pollInterval = 3000 
+                pollInterval = 3000,
+                loopDetectionUrls = []
             } = options;
             const reconnectDelay = 500;
             const staleReconnectMs = 12000;
@@ -229,6 +231,11 @@ class BrowserbaseService {
             let pollInFlight = false;
             let hasLoggedConnectionReady = false;
             let session410Count = 0;
+            
+            // 循环检测
+            const urlHistory = [];
+            const maxHistorySize = 10;
+            const loopThreshold = 3; // 同一个 URL 出现 3 次视为循环
             
             const timeoutId = setTimeout(() => {
                 cleanup();
@@ -300,6 +307,26 @@ class BrowserbaseService {
 
                 if (onUrlChange) {
                     onUrlChange(currentUrl);
+                }
+                
+                // 循环检测
+                if (loopDetectionUrls.length > 0) {
+                    for (const loopUrl of loopDetectionUrls) {
+                        if (currentUrl.includes(loopUrl)) {
+                            urlHistory.push(loopUrl);
+                            if (urlHistory.length > maxHistorySize) {
+                                urlHistory.shift();
+                            }
+                            
+                            // 统计最近出现次数
+                            const count = urlHistory.filter(u => u === loopUrl).length;
+                            if (count >= loopThreshold) {
+                                console.error(`[Browserbase] 检测到循环: ${loopUrl} 出现 ${count} 次`);
+                                settleReject(new Error(`Agent 陷入循环: ${loopUrl}`));
+                                return true;
+                            }
+                        }
+                    }
                 }
 
                 if (targetKeyword && currentUrl.includes(targetKeyword)) {

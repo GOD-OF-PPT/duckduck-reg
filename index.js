@@ -93,7 +93,8 @@ async function phase1(emailProvider, browserbase, userData) {
             console.log('[阶段1.3] ✓ 注册完成');
             return url;
         },
-        timeout: 300000
+        timeout: 180000, // 3分钟
+        loopDetectionUrls: ['auth.openai.com/log-in', 'auth.openai.com/email-verification']
     });
     
     browserbase.disconnect();
@@ -142,7 +143,8 @@ async function phase2(emailProvider, browserbase, oauthService, userData) {
             console.log('[阶段2.1] ✓ 验证码已发送');
             return url;
         },
-        timeout: 180000 // 3分钟
+        timeout: 180000, // 3分钟
+        loopDetectionUrls: ['auth.openai.com/log-in', 'auth.openai.com/email-verification']
     });
     
     browserbase.disconnect();
@@ -173,7 +175,8 @@ async function phase2(emailProvider, browserbase, oauthService, userData) {
             console.log('[阶段2.3] ✓ 检测到 localhost 回调');
             return url;
         },
-        timeout: 180000 // 3分钟
+        timeout: 180000, // 3分钟
+        loopDetectionUrls: ['auth.openai.com/log-in', 'auth.openai.com/email-verification']
     });
     
     console.log(`[阶段2] 回调 URL: ${callbackUrl}`);
