@@ -36,7 +36,7 @@ function generateUserData() {
 }
 
 /**
- * 第一阶段：ChatGPT 注册（拆分为多个步骤）
+ * 第一阶段：ChatGPT 注册（简化为两步）
  */
 async function phase1(emailProvider, browserbase, userData) {
     console.log('\n=========================================');
@@ -49,122 +49,89 @@ async function phase1(emailProvider, browserbase, userData) {
     console.log('\n[阶段1.1] 填写注册信息并发送验证码...');
     const session1 = await browserbase.createSession();
     
-    const goal1 = `打开 https://chatgpt.com 并点击注册按钮，使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password} 填写注册表单，点击继续按钮发送验证码。等待页面显示"输入验证码"或类似提示后，导航到 data:text/html,<html><head><title>STEP1_DONE</title></head></html> 并结束。`;
+    const goal1 = `打开 https://chatgpt.com 并点击注册，使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password} 填写表单，点击继续发送验证码。看到"输入验证码"提示后，导航到 data:text/html,<html><head><title>CODE_SENT</title></head></html>`;
     
     console.log(`[阶段1.1] Goal: ${goal1}`);
     
     browserbase.sendAgentGoal(goal1).catch(e => {
-        console.error(`[阶段1.1] Agent 任务流异常: ${e.message}`);
+        console.error(`[阶段1.1] Agent 异常: ${e.message}`);
     });
     
-    const step1Url = await browserbase.connectToCDP(session1.wsUrl, {
-        targetKeyword: 'STEP1_DONE',
-        onUrlChange: (url) => console.log(`[阶段1.1] URL: ${url}`),
+    await browserbase.connectToCDP(session1.wsUrl, {
+        targetKeyword: 'CODE_SENT',
+        onUrlChange: (url) => console.log(`[阶段1.1] ${url}`),
         onTargetReached: (url) => {
             console.log('[阶段1.1] ✓ 验证码已发送');
             return url;
         },
-        timeout: 300000 // 5分钟
+        timeout: 300000
     });
     
     browserbase.disconnect();
-    console.log(`[阶段1.1] 完成: ${step1Url}`);
     
     // 步骤 1.2: 获取验证码
-    console.log('\n[阶段1.2] 从邮箱获取验证码...');
-    const verificationCode = await verificationService.getVerificationCode(config.mailInboxUrl);
-    console.log(`[阶段1.2] ✓ 验证码: ${verificationCode}`);
+    console.log('\n[阶段1.2] 获取验证码...');
+    const code = await verificationService.getVerificationCode(config.mailInboxUrl);
+    console.log(`[阶段1.2] ✓ 验证码: ${code}`);
     
-    // 步骤 1.3: 填写验证码并完成注册
-    console.log('\n[阶段1.3] 填写验证码并完成注册...');
+    // 步骤 1.3: 完成注册
+    console.log('\n[阶段1.3] 完成注册...');
     const session2 = await browserbase.createSession();
     
-    const goal2 = `打开 https://chatgpt.com 并使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password} 登录（如果需要），在验证码输入框中填写 ${verificationCode}，然后填写姓名 ${userData.fullName} 和出生日期 ${userData.birthDate}（如果要求年龄则填写 ${userData.age}），完成所有注册步骤。注册成功后导航到 data:text/html,<html><head><title>REGISTRATION_COMPLETE</title></head></html> 并结束。`;
+    const goal2 = `打开 https://chatgpt.com，用 ${emailProvider.getEmail()} 和 ${userData.password} 登录，填写验证码 ${code}，然后填写姓名 ${userData.fullName} 和出生日期 ${userData.birthDate}（年龄填 ${userData.age}），完成注册。成功后导航到 data:text/html,<html><head><title>DONE</title></head></html>`;
     
     console.log(`[阶段1.3] Goal: ${goal2}`);
     
     browserbase.sendAgentGoal(goal2).catch(e => {
-        console.error(`[阶段1.3] Agent 任务流异常: ${e.message}`);
+        console.error(`[阶段1.3] Agent 异常: ${e.message}`);
     });
     
-    const finalUrl = await browserbase.connectToCDP(session2.wsUrl, {
-        targetKeyword: 'REGISTRATION_COMPLETE',
-        onUrlChange: (url) => console.log(`[阶段1.3] URL: ${url}`),
+    await browserbase.connectToCDP(session2.wsUrl, {
+        targetKeyword: 'DONE',
+        onUrlChange: (url) => console.log(`[阶段1.3] ${url}`),
         onTargetReached: (url) => {
             console.log('[阶段1.3] ✓ 注册完成');
             return url;
         },
-        timeout: 300000 // 5分钟
+        timeout: 300000
     });
     
     browserbase.disconnect();
-    console.log(`[阶段1] 注册流程完成: ${finalUrl}`);
+    console.log('[阶段1] ✓ 注册流程完成');
     
     return true;
 }
 
 /**
- * 第二阶段：Codex OAuth 授权（拆分为多个步骤）
+ * 第二阶段：Codex OAuth 授权（简化流程，一步完成）
  */
 async function phase2(emailProvider, browserbase, oauthService, userData) {
     console.log('\n=========================================');
     console.log('[阶段2] 开始 Codex OAuth 授权流程');
     console.log('=========================================');
     
-    const verificationService = new VerificationCodeService();
-    
     // 重新生成 PKCE 参数
     oauthService.regeneratePKCE();
     const authUrl = oauthService.getAuthUrl();
     console.log(`[阶段2] OAuth URL: ${authUrl.substring(0, 100)}...`);
     
-    // 步骤 2.1: OAuth 登录并发送验证码
-    console.log('\n[阶段2.1] OAuth 登录并发送验证码...');
-    const session1 = await browserbase.createSession();
+    // 一步完成：直接访问 OAuth URL 并授权（利用阶段1的登录状态）
+    console.log('\n[阶段2] 访问 OAuth URL 并完成授权...');
+    const session = await browserbase.createSession();
     
-    const goal1 = `导航到 ${authUrl}，使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password} 登录。等待页面要求输入验证码后，导航到 data:text/html,<html><head><title>OAUTH_STEP1_DONE</title></head></html> 并结束。`;
+    const goal = `导航到 ${authUrl}。如果页面显示授权确认，直接点击"允许"或"授权"按钮。如果要求登录，使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password}。页面最终会跳转到 localhost 开头的回调地址（显示无法访问是正常的），保持在该页面即可。`;
     
-    console.log(`[阶段2.1] Goal: ${goal1}`);
+    console.log(`[阶段2] Goal: ${goal}`);
     
-    browserbase.sendAgentGoal(goal1).catch(e => {
-        console.error(`[阶段2.1] Agent 任务流异常: ${e.message}`);
+    browserbase.sendAgentGoal(goal).catch(e => {
+        console.error(`[阶段2] Agent 任务流异常: ${e.message}`);
     });
     
-    const step1Url = await browserbase.connectToCDP(session1.wsUrl, {
-        targetKeyword: 'OAUTH_STEP1_DONE',
-        onUrlChange: (url) => console.log(`[阶段2.1] URL: ${url}`),
-        onTargetReached: (url) => {
-            console.log('[阶段2.1] ✓ 登录验证码已发送');
-            return url;
-        },
-        timeout: 300000 // 5分钟
-    });
-    
-    browserbase.disconnect();
-    console.log(`[阶段2.1] 完成: ${step1Url}`);
-    
-    // 步骤 2.2: 获取验证码
-    console.log('\n[阶段2.2] 从邮箱获取验证码...');
-    const verificationCode = await verificationService.getVerificationCode(config.mailInboxUrl);
-    console.log(`[阶段2.2] ✓ 验证码: ${verificationCode}`);
-    
-    // 步骤 2.3: 填写验证码并完成授权
-    console.log('\n[阶段2.3] 填写验证码并完成授权...');
-    const session2 = await browserbase.createSession();
-    
-    const goal2 = `导航到 ${authUrl}，使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password} 登录（如果需要），在验证码输入框中填写 ${verificationCode}，然后点击授权按钮允许 Codex 访问。等待页面跳转到 localhost 回调地址（会显示无法访问），记录完整 URL 并保持在该页面。`;
-    
-    console.log(`[阶段2.3] Goal: ${goal2}`);
-    
-    browserbase.sendAgentGoal(goal2).catch(e => {
-        console.error(`[阶段2.3] Agent 任务流异常: ${e.message}`);
-    });
-    
-    const callbackUrl = await browserbase.connectToCDP(session2.wsUrl, {
+    const callbackUrl = await browserbase.connectToCDP(session.wsUrl, {
         targetKeyword: 'localhost',
-        onUrlChange: (url) => console.log(`[阶段2.3] URL: ${url}`),
+        onUrlChange: (url) => console.log(`[阶段2] URL: ${url}`),
         onTargetReached: (url) => {
-            console.log('[阶段2.3] ✓ 检测到 localhost 回调');
+            console.log('[阶段2] ✓ 检测到 localhost 回调');
             return url;
         },
         timeout: 300000 // 5分钟
