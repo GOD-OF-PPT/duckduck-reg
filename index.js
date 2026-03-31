@@ -3,6 +3,7 @@ const fs = require('fs');
 const { DDGEmailProvider } = require('./src/ddgProvider');
 const { BrowserbaseService } = require('./src/browserbaseService');
 const { OAuthService } = require('./src/oauthService');
+const { VerificationCodeService } = require('./src/verificationCodeService');
 const { generateRandomName, generateRandomPassword } = require('./src/randomIdentity');
 const config = require('./src/config');
 
@@ -35,104 +36,138 @@ function generateUserData() {
 }
 
 /**
- * 第一阶段：ChatGPT 注册
+ * 第一阶段：ChatGPT 注册（拆分为多个步骤）
  */
 async function phase1(emailProvider, browserbase, userData) {
     console.log('\n=========================================');
     console.log('[阶段1] 开始 ChatGPT 注册流程');
     console.log('=========================================');
     
-    // 创建会话
-    const session = await browserbase.createSession();
+    const verificationService = new VerificationCodeService();
     
-    // 构建 Agent Goal
-    const goal = `请打开chatgpt的对话页面，然后点击创建一个账户，使用${emailProvider.getEmail()}作为邮箱，${userData.password}作为密码，然后在显示验证码发送后在${config.mailInboxUrl}上接收自己的邮箱验证码，接下来使用${userData.fullName}作为全名，${userData.birthDate}作为出生日期（注意如果框里面要填年龄的话换算为年龄），创建账户后导航到\`data:text/html,<html><head><title>MISSION_ACCOMPLISHED</title></head><body style=\"background:black;color:lime;display:flex;justify-content:center;align-items:center;height:100vh;font-family:monospace;\"><h1>> TASK COMPLETED SUCCESSFULLY _</h1></body></html>\`，等待3秒并结束。
-
-每次等待的时间不得超过3秒。`;
+    // 步骤 1.1: 注册并发送验证码
+    console.log('\n[阶段1.1] 填写注册信息并发送验证码...');
+    const session1 = await browserbase.createSession();
     
-    console.log('[阶段1] Agent Goal 已准备');
+    const goal1 = `打开 https://chatgpt.com 并点击注册按钮，使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password} 填写注册表单，点击继续按钮发送验证码。等待页面显示"输入验证码"或类似提示后，导航到 data:text/html,<html><head><title>STEP1_DONE</title></head></html> 并结束。`;
     
-    // 发送 Agent 任务（不等待 EventStream）
-    browserbase.sendAgentGoal(goal).catch(e => {
-        console.error(`[阶段1] Agent 任务流异常: ${e.message}`);
+    console.log(`[阶段1.1] Goal: ${goal1}`);
+    
+    browserbase.sendAgentGoal(goal1).catch(e => {
+        console.error(`[阶段1.1] Agent 任务流异常: ${e.message}`);
     });
     
-    // 连接 CDP 监控 URL 变化
-    const wsUrl = session.wsUrl;
-    if (!wsUrl) {
-        throw new Error('无法从 sessionUrl 中提取 WSS 地址');
-    }
-    
-    console.log('[阶段1] 开始监控页面 URL 变化，等待到达 MISSION_ACCOMPLISHED 页面...');
-    
-    // 监控直到到达 MISSION_ACCOMPLISHED 页面
-    const finalUrl = await browserbase.connectToCDP(wsUrl, {
-        targetKeyword: 'MISSION_ACCOMPLISHED',
-        onUrlChange: (url) => {
-            console.log(`[阶段1] URL 变化: ${url}`);
-        },
+    const step1Url = await browserbase.connectToCDP(session1.wsUrl, {
+        targetKeyword: 'STEP1_DONE',
+        onUrlChange: (url) => console.log(`[阶段1.1] URL: ${url}`),
         onTargetReached: (url) => {
-            console.log(`[阶段1] 检测到 MISSION_ACCOMPLISHED 页面，注册流程完成！`);
+            console.log('[阶段1.1] ✓ 验证码已发送');
             return url;
         },
-        timeout: 1800000 // 30分钟超时
+        timeout: 300000 // 5分钟
     });
     
-    console.log(`[阶段1] 最终 URL: ${finalUrl}`);
     browserbase.disconnect();
+    console.log(`[阶段1.1] 完成: ${step1Url}`);
+    
+    // 步骤 1.2: 获取验证码
+    console.log('\n[阶段1.2] 从邮箱获取验证码...');
+    const verificationCode = await verificationService.getVerificationCode(config.mailInboxUrl);
+    console.log(`[阶段1.2] ✓ 验证码: ${verificationCode}`);
+    
+    // 步骤 1.3: 填写验证码并完成注册
+    console.log('\n[阶段1.3] 填写验证码并完成注册...');
+    const session2 = await browserbase.createSession();
+    
+    const goal2 = `打开 https://chatgpt.com 并使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password} 登录（如果需要），在验证码输入框中填写 ${verificationCode}，然后填写姓名 ${userData.fullName} 和出生日期 ${userData.birthDate}（如果要求年龄则填写 ${userData.age}），完成所有注册步骤。注册成功后导航到 data:text/html,<html><head><title>REGISTRATION_COMPLETE</title></head></html> 并结束。`;
+    
+    console.log(`[阶段1.3] Goal: ${goal2}`);
+    
+    browserbase.sendAgentGoal(goal2).catch(e => {
+        console.error(`[阶段1.3] Agent 任务流异常: ${e.message}`);
+    });
+    
+    const finalUrl = await browserbase.connectToCDP(session2.wsUrl, {
+        targetKeyword: 'REGISTRATION_COMPLETE',
+        onUrlChange: (url) => console.log(`[阶段1.3] URL: ${url}`),
+        onTargetReached: (url) => {
+            console.log('[阶段1.3] ✓ 注册完成');
+            return url;
+        },
+        timeout: 300000 // 5分钟
+    });
+    
+    browserbase.disconnect();
+    console.log(`[阶段1] 注册流程完成: ${finalUrl}`);
     
     return true;
 }
 
 /**
- * 第二阶段：Codex OAuth 授权
+ * 第二阶段：Codex OAuth 授权（拆分为多个步骤）
  */
 async function phase2(emailProvider, browserbase, oauthService, userData) {
     console.log('\n=========================================');
     console.log('[阶段2] 开始 Codex OAuth 授权流程');
     console.log('=========================================');
     
+    const verificationService = new VerificationCodeService();
+    
     // 重新生成 PKCE 参数
     oauthService.regeneratePKCE();
-    
-    // 获取 OAuth URL
     const authUrl = oauthService.getAuthUrl();
     console.log(`[阶段2] OAuth URL: ${authUrl.substring(0, 100)}...`);
     
-    // 创建新的会话
-    const session = await browserbase.createSession();
+    // 步骤 2.1: OAuth 登录并发送验证码
+    console.log('\n[阶段2.1] OAuth 登录并发送验证码...');
+    const session1 = await browserbase.createSession();
     
-    // 构建 Agent Goal
-    const goal = `选择导航到${authUrl}，使用${emailProvider.getEmail()}作为邮箱，${userData.password}作为密码登录，然后在显示验证码发送后在${config.mailInboxUrl}上接收自己的邮箱验证码，选择登录到codex，地址跳转到localhost回调链接，出现无法访问的页面后记录当前完整url并结束。
-
-每次等待的时间不得超过3秒。`;
+    const goal1 = `导航到 ${authUrl}，使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password} 登录。等待页面要求输入验证码后，导航到 data:text/html,<html><head><title>OAUTH_STEP1_DONE</title></head></html> 并结束。`;
     
-    console.log('[阶段2] Agent Goal 已准备');
+    console.log(`[阶段2.1] Goal: ${goal1}`);
     
-    // 发送 Agent 任务
-    browserbase.sendAgentGoal(goal).catch(e => {
-        console.error(`[阶段2] Agent 任务流异常: ${e.message}`);
+    browserbase.sendAgentGoal(goal1).catch(e => {
+        console.error(`[阶段2.1] Agent 任务流异常: ${e.message}`);
     });
     
-    // 连接 CDP 监控 URL 变化
-    const wsUrl = session.wsUrl;
-    if (!wsUrl) {
-        throw new Error('无法从 sessionUrl 中提取 WSS 地址');
-    }
-    
-    console.log('[阶段2] 开始监控页面 URL 变化，等待 localhost 回调...');
-    
-    // 监控直到到达 localhost
-    const callbackUrl = await browserbase.connectToCDP(wsUrl, {
-        targetKeyword: 'localhost',
-        onUrlChange: (url) => {
-            console.log(`[阶段2] URL 变化: ${url}`);
-        },
+    const step1Url = await browserbase.connectToCDP(session1.wsUrl, {
+        targetKeyword: 'OAUTH_STEP1_DONE',
+        onUrlChange: (url) => console.log(`[阶段2.1] URL: ${url}`),
         onTargetReached: (url) => {
-            console.log(`[阶段2] 检测到 localhost 回调！`);
+            console.log('[阶段2.1] ✓ 登录验证码已发送');
             return url;
         },
-        timeout: 1800000 // 30分钟超时
+        timeout: 300000 // 5分钟
+    });
+    
+    browserbase.disconnect();
+    console.log(`[阶段2.1] 完成: ${step1Url}`);
+    
+    // 步骤 2.2: 获取验证码
+    console.log('\n[阶段2.2] 从邮箱获取验证码...');
+    const verificationCode = await verificationService.getVerificationCode(config.mailInboxUrl);
+    console.log(`[阶段2.2] ✓ 验证码: ${verificationCode}`);
+    
+    // 步骤 2.3: 填写验证码并完成授权
+    console.log('\n[阶段2.3] 填写验证码并完成授权...');
+    const session2 = await browserbase.createSession();
+    
+    const goal2 = `导航到 ${authUrl}，使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password} 登录（如果需要），在验证码输入框中填写 ${verificationCode}，然后点击授权按钮允许 Codex 访问。等待页面跳转到 localhost 回调地址（会显示无法访问），记录完整 URL 并保持在该页面。`;
+    
+    console.log(`[阶段2.3] Goal: ${goal2}`);
+    
+    browserbase.sendAgentGoal(goal2).catch(e => {
+        console.error(`[阶段2.3] Agent 任务流异常: ${e.message}`);
+    });
+    
+    const callbackUrl = await browserbase.connectToCDP(session2.wsUrl, {
+        targetKeyword: 'localhost',
+        onUrlChange: (url) => console.log(`[阶段2.3] URL: ${url}`),
+        onTargetReached: (url) => {
+            console.log('[阶段2.3] ✓ 检测到 localhost 回调');
+            return url;
+        },
+        timeout: 300000 // 5分钟
     });
     
     console.log(`[阶段2] 回调 URL: ${callbackUrl}`);
@@ -147,12 +182,13 @@ async function phase2(emailProvider, browserbase, oauthService, userData) {
         throw new Error('回调 URL 中未找到授权码');
     }
     
-    console.log(`[阶段2] 成功获取授权码: ${params.code.substring(0, 10)}...`);
+    console.log(`[阶段2] ✓ 授权码: ${params.code.substring(0, 10)}...`);
     
     // 用授权码换取 Token
     const tokenData = await oauthService.exchangeTokenAndSave(params.code, emailProvider.getEmail());
     
     browserbase.disconnect();
+    console.log('[阶段2] OAuth 授权流程完成');
     
     return tokenData;
 }
