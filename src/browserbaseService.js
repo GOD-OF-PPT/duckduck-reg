@@ -205,7 +205,7 @@ class BrowserbaseService {
      * @returns {Promise<void>}
      */
     connectToCDP(wsUrl, options = {}) {
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             const { 
                 targetKeyword, 
                 onUrlChange, 
@@ -216,7 +216,7 @@ class BrowserbaseService {
             const reconnectDelay = 500;
             const staleReconnectMs = 12000;
             
-            const fullWsUrl = this.normalizeWsUrl(wsUrl);
+            let fullWsUrl = this.normalizeWsUrl(wsUrl);
             
             console.log(`[Browserbase] 连接到 CDP: ${fullWsUrl.substring(0, 60)}...`);
             
@@ -228,6 +228,7 @@ class BrowserbaseService {
             let lastReconnectAt = 0;
             let pollInFlight = false;
             let hasLoggedConnectionReady = false;
+            let session410Count = 0;
             
             const timeoutId = setTimeout(() => {
                 cleanup();
@@ -366,6 +367,7 @@ class BrowserbaseService {
                 this.wsConnection.on('open', () => {
                     this.messageId = 1;
                     lastReconnectAt = Date.now();
+                    session410Count = 0;
                     
                     // 只启用 Target 发现，避免 Page/Runtime/Network 持续推送高频事件。
                     this.wsConnection.send(JSON.stringify({ id: this.messageId++, method: 'Target.setDiscoverTargets', params: { discover: true } }));
@@ -411,13 +413,47 @@ class BrowserbaseService {
                     }
                 });
 
-                this.wsConnection.on('error', (error) => {
+                this.wsConnection.on('error', async (error) => {
+                    const is410 = error.message?.includes('410') || error.message?.includes('Gone');
+                    
+                    if (is410) {
+                        console.error('[Browserbase] CDP 410 错误: Session 已过期');
+                        session410Count++;
+                        
+                        if (session410Count > 3) {
+                            settleReject(new Error('Session 410 错误超过重试次数'));
+                            return;
+                        }
+                        
+                        console.log(`[Browserbase] 创建新 Session (重试 ${session410Count}/3)...`);
+                        this.clearPendingCommands('Session 410，重新创建');
+                        
+                        try {
+                            const newSession = await this.createSession();
+                            fullWsUrl = this.normalizeWsUrl(newSession.wsUrl);
+                            console.log(`[Browserbase] 新 Session 已创建: ${this.sessionId}`);
+                            scheduleReconnect('Session 410 已重建');
+                        } catch (err) {
+                            console.error('[Browserbase] 创建新 Session 失败:', err.message);
+                            settleReject(err);
+                        }
+                        return;
+                    }
+                    
                     console.error('[Browserbase] CDP WebSocket 错误:', error.message);
                     this.clearPendingCommands(`CDP 连接异常: ${error.message}`);
                     scheduleReconnect('CDP 连接异常');
                 });
 
-                this.wsConnection.on('close', () => {
+                this.wsConnection.on('close', (code) => {
+                    const is410 = code === 410;
+                    
+                    if (is410) {
+                        console.error('[Browserbase] WebSocket 关闭码 410: Session 已过期');
+                        // 错误处理已在 error 事件中完成
+                        return;
+                    }
+                    
                     this.clearPendingCommands('page websocket 已结束');
                     scheduleReconnect('page websocket 已结束');
                 });
