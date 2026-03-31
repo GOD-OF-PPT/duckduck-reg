@@ -74,7 +74,7 @@ async function phase1(emailProvider, browserbase, userData) {
     const code = await verificationService.getVerificationCode(config.mailInboxUrl);
     console.log(`[阶段1.2] ✓ 验证码: ${code}`);
     
-    // 步骤 1.3: 完成注册
+    // 步骤 1.3: 完成注册（复用 session1）
     console.log('\n[阶段1.3] 完成注册...');
     const session2 = await browserbase.createSession();
     
@@ -99,42 +99,81 @@ async function phase1(emailProvider, browserbase, userData) {
     browserbase.disconnect();
     console.log('[阶段1] ✓ 注册流程完成');
     
+    // 返回成功标志
     return true;
 }
 
 /**
- * 第二阶段：Codex OAuth 授权（简化流程，一步完成）
+ * 第二阶段：Codex OAuth 授权（回退到包含登录的完整流程）
  */
 async function phase2(emailProvider, browserbase, oauthService, userData) {
     console.log('\n=========================================');
     console.log('[阶段2] 开始 Codex OAuth 授权流程');
     console.log('=========================================');
     
+    const verificationService = new VerificationCodeService();
+    
     // 重新生成 PKCE 参数
     oauthService.regeneratePKCE();
     const authUrl = oauthService.getAuthUrl();
-    console.log(`[阶段2] OAuth URL: ${authUrl.substring(0, 100)}...`);
+    console.log(`[阶段2] OAuth URL: ${authUrl.substring(0, 80)}...`);
     
-    // 一步完成：直接访问 OAuth URL 并授权（利用阶段1的登录状态）
-    console.log('\n[阶段2] 访问 OAuth URL 并完成授权...');
-    const session = await browserbase.createSession();
+    // 步骤 2.1: 登录并发送验证码
+    console.log('\n[阶段2.1] 登录并发送验证码...');
+    const session1 = await browserbase.createSession();
     
-    const goal = `导航到 ${authUrl}。如果页面显示授权确认，直接点击"允许"或"授权"按钮。如果要求登录，使用邮箱 ${emailProvider.getEmail()} 和密码 ${userData.password}。页面最终会跳转到 localhost 开头的回调地址（显示无法访问是正常的），保持在该页面即可。`;
+    const goal1 = `导航到 ${authUrl}，填写邮箱 ${emailProvider.getEmail()}，点击继续，填写密码 ${userData.password}，点击继续发送验证码。看到"输入验证码"后，导航到 data:text/html,<html><head><title>OAUTH_CODE_SENT</title></head></html>`;
     
-    console.log(`[阶段2] Goal: ${goal}`);
+    console.log(`[阶段2.1] 开始...`);
     
-    browserbase.sendAgentGoal(goal).catch(e => {
-        console.error(`[阶段2] Agent 任务流异常: ${e.message}`);
+    browserbase.sendAgentGoal(goal1).catch(e => {
+        console.error(`[阶段2.1] Agent 异常: ${e.message}`);
     });
     
-    const callbackUrl = await browserbase.connectToCDP(session.wsUrl, {
-        targetKeyword: 'localhost',
-        onUrlChange: (url) => console.log(`[阶段2] URL: ${url}`),
+    await browserbase.connectToCDP(session1.wsUrl, {
+        targetKeyword: 'OAUTH_CODE_SENT',
+        onUrlChange: (url) => {
+            console.log(`[阶段2.1] ${url}`);
+            if (url.includes('/log-in/password')) {
+                console.log('[阶段2.1] → 密码页面');
+            }
+        },
         onTargetReached: (url) => {
-            console.log('[阶段2] ✓ 检测到 localhost 回调');
+            console.log('[阶段2.1] ✓ 验证码已发送');
             return url;
         },
-        timeout: 300000 // 5分钟
+        timeout: 180000 // 3分钟
+    });
+    
+    browserbase.disconnect();
+    
+    // 步骤 2.2: 获取验证码
+    console.log('\n[阶段2.2] 获取验证码...');
+    const code = await verificationService.getVerificationCode(config.mailInboxUrl, 15, 4000);
+    console.log(`[阶段2.2] ✓ 验证码: ${code}`);
+    
+    // 步骤 2.3: 填写验证码并授权
+    console.log('\n[阶段2.3] 填写验证码并授权...');
+    const session2 = await browserbase.createSession();
+    
+    const goal2 = `导航到 ${authUrl}，填写邮箱 ${emailProvider.getEmail()}，密码 ${userData.password}，验证码 ${code}，然后点击"允许"或"授权"按钮。等待跳转到 localhost 回调地址。`;
+    
+    console.log(`[阶段2.3] 开始...`);
+    
+    browserbase.sendAgentGoal(goal2).catch(e => {
+        console.error(`[阶段2.3] Agent 异常: ${e.message}`);
+    });
+    
+    const callbackUrl = await browserbase.connectToCDP(session2.wsUrl, {
+        targetKeyword: 'localhost',
+        onUrlChange: (url) => {
+            console.log(`[阶段2.3] ${url}`);
+        },
+        onTargetReached: (url) => {
+            console.log('[阶段2.3] ✓ 检测到 localhost 回调');
+            return url;
+        },
+        timeout: 180000 // 3分钟
     });
     
     console.log(`[阶段2] 回调 URL: ${callbackUrl}`);
@@ -155,7 +194,7 @@ async function phase2(emailProvider, browserbase, oauthService, userData) {
     const tokenData = await oauthService.exchangeTokenAndSave(params.code, emailProvider.getEmail());
     
     browserbase.disconnect();
-    console.log('[阶段2] OAuth 授权流程完成');
+    console.log('[阶段2] ✓ OAuth 授权流程完成');
     
     return tokenData;
 }
